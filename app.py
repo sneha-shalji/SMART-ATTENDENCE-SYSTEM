@@ -1,17 +1,8 @@
-from flask import Flask, render_template, Response
 import numpy as np
 import cv2
 import face_recognition
 import csv
 from datetime import datetime
-
-import os
-print("Current working directory:", os.getcwd())
-
-
-app = Flask(__name__)
-
-
 
 anya_img = face_recognition.load_image_file('static\Anya.jpg')
 anya_encoding = face_recognition.face_encodings(anya_img)[0]
@@ -76,44 +67,53 @@ def generate_frames():
         success, frame = cap.read()
         if not success:
             break
-        else:
-            # Resize frame
-            small_frame = cv2.resize(frame, (0,0), fx=0.25, fy=0.25)
-            rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
 
-            face_locations = face_recognition.face_locations(rgb_small_frame)
-            face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
+        # Resize for faster processing
+        small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
+        rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
 
-            for face_encoding in face_encodings:
-                matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
-                face_distance = face_recognition.face_distance(known_face_encodings, face_encoding)
-                best_match_index = np.argmin(face_distance)
+        # Detect faces
+        face_locations = face_recognition.face_locations(rgb_small_frame)
+        face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
 
-                if matches[best_match_index]:
-                    name = known_face_names[best_match_index]
+        for face_encoding, face_location in zip(face_encodings, face_locations):
+            matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
+            face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
+            best_match_index = np.argmin(face_distances)
 
-                    if name in students:
-                        students.remove(name)
-                        current_time = datetime.now().strftime("%H:%M:%S")
-                        lnwrite.writerow([name, current_time])
+            name = "Unknown"
 
-                    # Draw on frame
-                    cv2.putText(frame, name, (50,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0),2)
+            if matches[best_match_index]:
+                name = known_face_names[best_match_index]
 
-            # Encode frame to display on web
-            ret, buffer = cv2.imencode('.jpg', frame)
-            frame = buffer.tobytes()
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+                if name in students:
+                    students.remove(name)
+                    current_time = datetime.now().strftime("%H:%M:%S")
+                    lnwrite.writerow([name, current_time])
+                    f.flush()
 
+            # Scale back face locations
+            top, right, bottom, left = face_location
+            top *= 4
+            right *= 4
+            bottom *= 4
+            left *= 4
 
-@app.route('/')
-def index():
-    return render_template('index.html')
+            # Draw box
+            cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
+            cv2.rectangle(frame, (left, bottom - 35), (right, bottom), (0, 255, 0), cv2.FILLED)
+            cv2.putText(frame, name, (left + 6, bottom - 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
-@app.route('/video')
-def video():
-    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+        yield frame
 
-if __name__ == '__main__':
-    app.run(debug=True)
+while True:
+    frame = next(generate_frames())
+    cv2.imshow("Face Attendance System", frame)
+
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+f.close()
+cv2.destroyAllWindows()
